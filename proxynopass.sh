@@ -1,6 +1,10 @@
 #!/bin/sh
 PATH=/usr/local/sbin:/usr/local/bin:/sbin:/bin:/usr/sbin:/usr/bin
 
+# Thư mục làm việc và file data
+WORKDIR="/home/bkns"
+WORKDATA="${WORKDIR}/data.txt"
+
 random() {
     tr </dev/urandom -dc A-Za-z0-9 | head -c5
     echo
@@ -16,30 +20,33 @@ gen64() {
 
 install_3proxy() {
     echo "installing 3proxy"
+    mkdir -p "$WORKDIR"
+    cd "$WORKDIR" || exit 1
     URL="https://github.com/z3APA3A/3proxy/archive/refs/tags/0.8.13.tar.gz"
     wget -qO- $URL | tar -xzf-
-    cd 3proxy-0.8.13
+    cd 3proxy-0.8.13 || exit 1
     make -f Makefile.Linux
     mkdir -p /usr/local/etc/3proxy/{bin,logs,stat}
     cp src/3proxy /usr/local/etc/3proxy/bin/
-    cd $WORKDIR
+    cd "$WORKDIR" || exit 1
 }
 
 gen_3proxy() {
     cat <<EOF
 daemon
-maxconn 4000
+maxconn 1000
 nserver 1.1.1.1
 nserver 8.8.4.4
 nserver 2001:4860:4860::8888
 nserver 2001:4860:4860::8844
-nscache 65536
+nscache 32768
 timeouts 1 5 30 60 180 1800 15 60
 setgid 65535
 setuid 65535
-stacksize 6291456 
+stacksize 262144
 flush
 
+# Xác thực theo IP, KHÔNG dùng user/pass
 auth iponly
 allow * 14.191.253.148
 deny *
@@ -49,7 +56,7 @@ EOF
 }
 
 gen_proxy_file_for_user() {
-    cat >proxy.txt <<EOF
+    cat >"${WORKDIR}/proxy.txt" <<EOF
 $(awk -F "/" '{print $3 ":" $4 }' ${WORKDATA})
 EOF
 }
@@ -68,12 +75,11 @@ EOF
 
 echo "installing apps"
 
+mkdir -p "$WORKDIR"
 install_3proxy
 
-echo "working folder = /home/bkns"
-WORKDIR="/home/bkns"
-WORKDATA="${WORKDIR}/data.txt"
-mkdir -p $WORKDIR && cd $WORKDIR
+echo "working folder = $WORKDIR"
+cd "$WORKDIR" || exit 1
 
 IP4=$(curl -4 -s icanhazip.com)
 IP6=$(curl -6 -s icanhazip.com | cut -f1-4 -d':')
@@ -81,13 +87,15 @@ IP6=$(curl -6 -s icanhazip.com | cut -f1-4 -d':')
 echo "Internal IP = ${IP4}. External sub for IP6 = ${IP6}"
 
 FIRST_PORT=22000
-LAST_PORT=22999
+LAST_PORT=22999   # 1000 proxy (22000 -> 22999)
 
-gen_data >$WORKDIR/data.txt
-gen_ifconfig >$WORKDIR/boot_ifconfig.sh
-chmod +x boot_*.sh /etc/rc.d/rc.local
+gen_data >"$WORKDATA"
+gen_ifconfig >"$WORKDIR/boot_ifconfig.sh"
+chmod +x "$WORKDIR"/boot_ifconfig.sh
 
 gen_3proxy >/usr/local/etc/3proxy/3proxy.cfg
+
+chmod +x /etc/rc.d/rc.local 2>/dev/null || true
 
 cat >>/etc/rc.d/rc.local <<EOF
 bash ${WORKDIR}/boot_ifconfig.sh
@@ -96,13 +104,13 @@ ulimit -n 10048
 EOF
 
 chmod +x /etc/rc.d/rc.local
-systemctl enable rc-local
-systemctl start rc-local
+systemctl enable rc-local 2>/dev/null || true
+systemctl start rc-local 2>/dev/null || true
 
 bash /etc/rc.d/rc.local
 
 gen_proxy_file_for_user
 rm -rf /root/setup.sh
-rm -rf /root/3proxy-3proxy-0.8.6
+rm -rf /root/3proxy-0.8.13
 
 echo "Starting Proxy"
