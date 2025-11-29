@@ -99,7 +99,7 @@ chmod +x /etc/rc.d/rc.local
 systemctl enable rc-local
 systemctl start rc-local
 
-bash /etc/rc.local
+bash /etc/rc.d/rc.local
 
 gen_proxy_file_for_user
 rm -rf /root/setup.sh
