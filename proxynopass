@@ -1,22 +1,12 @@
-#!/bin/bash
-# 3proxy IPv6 - 1000 proxies, IP auth only (AlmaLinux 9 friendly)
+#!/bin/sh
 PATH=/usr/local/sbin:/usr/local/bin:/sbin:/bin:/usr/sbin:/usr/bin
 
-# ================== CẤU HÌNH ==================
-MY_ALLOWED_IP="14.191.253.148"   # Chỉ IP này được dùng proxy
-FIRST_PORT=22000                 # Port bắt đầu
-LAST_PORT=22999                  # Port kết thúc (22000 -> 22999 = 1000 proxy)
-WORKDIR="/home/bkns"
-WORKDATA="${WORKDIR}/data.txt"
-# ==============================================
-
-if [ "$EUID" -ne 0 ]; then
-    echo "Vui lòng chạy script với quyền root (sudo)."
-    exit 1
-fi
+random() {
+    tr </dev/urandom -dc A-Za-z0-9 | head -c5
+    echo
+}
 
 array=(1 2 3 4 5 6 7 8 9 0 a b c d e f)
-
 gen64() {
     ip64() {
         echo "${array[$RANDOM % 16]}${array[$RANDOM % 16]}${array[$RANDOM % 16]}${array[$RANDOM % 16]}"
@@ -25,16 +15,14 @@ gen64() {
 }
 
 install_3proxy() {
-    echo "[*] Cài đặt 3proxy..."
-    mkdir -p "$WORKDIR"
-    cd "$WORKDIR" || exit 1
+    echo "installing 3proxy"
     URL="https://github.com/z3APA3A/3proxy/archive/refs/tags/0.8.13.tar.gz"
-    wget -qO- "$URL" | tar -xzf- || { echo "Tải 3proxy thất bại"; exit 1; }
-    cd 3proxy-0.8.13 || { echo "Không tìm thấy thư mục 3proxy-0.8.13"; exit 1; }
-    make -f Makefile.Linux || { echo "Biên dịch 3proxy lỗi"; exit 1; }
+    wget -qO- $URL | tar -xzf-
+    cd 3proxy-0.8.13
+    make -f Makefile.Linux
     mkdir -p /usr/local/etc/3proxy/{bin,logs,stat}
-    cp src/3proxy /usr/local/etc/3proxy/bin/ || { echo "Copy binary 3proxy lỗi"; exit 1; }
-    cd "$WORKDIR" || exit 1
+    cp src/3proxy /usr/local/etc/3proxy/bin/
+    cd $WORKDIR
 }
 
 gen_3proxy() {
@@ -42,138 +30,79 @@ gen_3proxy() {
 daemon
 maxconn 4000
 nserver 1.1.1.1
-nserver 8.8.8.8
+nserver 8.8.4.4
 nserver 2001:4860:4860::8888
 nserver 2001:4860:4860::8844
 nscache 65536
 timeouts 1 5 30 60 180 1800 15 60
 setgid 65535
 setuid 65535
-stacksize 6291456
+stacksize 6291456 
 flush
 
-# XÁC THỰC THEO IP CLIENT
 auth iponly
-allow * ${MY_ALLOWED_IP}
+allow * 14.191.253.148
 deny *
 
-$(awk -F "/" '{print "proxy -6 -n -a -p" $1 " -i" $2 " -e" $3 }' ${WORKDATA})
+$(awk -F "/" '{print "proxy -6 -n -a -p" $4 " -i" $3 " -e"$5"\n"}' ${WORKDATA})
 EOF
 }
 
 gen_proxy_file_for_user() {
-    # Xuất ra định dạng IP:PORT
-    cat > "${WORKDIR}/proxy.txt" <<EOF
-$(awk -F "/" '{print $2 ":" $1 }' ${WORKDATA})
+    cat >proxy.txt <<EOF
+$(awk -F "/" '{print $3 ":" $4 }' ${WORKDATA})
 EOF
 }
 
 gen_data() {
-    # Format: PORT/IPv4/IPv6
-    seq $FIRST_PORT $LAST_PORT | while read -r port; do
-        echo "$port/$IP4/$(gen64 "$IP6")"
+    seq $FIRST_PORT $LAST_PORT | while read port; do
+        echo "user$port/$(random)/$IP4/$port/$(gen64 $IP6)"
     done
 }
 
 gen_ifconfig() {
-    # ifconfig eth0 inet6 add <IPv6>/64
     cat <<EOF
-$(awk -F "/" '{print "ifconfig eth0 inet6 add " $3 "/64"}' ${WORKDATA})
+$(awk -F "/" '{print "ifconfig eth0 inet6 add " $5 "/64"}' ${WORKDATA})
 EOF
 }
 
-open_firewall() {
-    echo "[*] Mở port firewall ${FIRST_PORT}-${LAST_PORT} (nếu có firewalld)..."
-    if command -v firewall-cmd >/dev/null 2>&1; then
-        systemctl start firewalld 2>/dev/null || true
-        firewall-cmd --permanent --add-port=${FIRST_PORT}-${LAST_PORT}/tcp || true
-        firewall-cmd --reload || true
-    else
-        echo "[i] Không có firewalld, bỏ qua bước mở firewall."
-    fi
-}
+echo "installing apps"
 
-echo "[*] Cài đặt gói phụ thuộc (gcc, make, wget, curl, net-tools)..."
-PKG_MGR=""
-if command -v dnf >/dev/null 2>&1; then
-    PKG_MGR="dnf"
-elif command -v yum >/dev/null 2>&1; then
-    PKG_MGR="yum"
-fi
+install_3proxy
 
-if [ -z "$PKG_MGR" ]; then
-    echo "Không tìm thấy dnf/yum, dừng."
-    exit 1
-fi
-
-$PKG_MGR -y install gcc make wget curl net-tools || {
-    echo "Cài đặt package thất bại, vui lòng kiểm tra kết nối mạng / repo."
-    exit 1
-}
-
-echo "[*] Tạo thư mục làm việc: $WORKDIR"
-mkdir -p "$WORKDIR"
-cd "$WORKDIR" || exit 1
+echo "working folder = /home/bkns"
+WORKDIR="/home/bkns"
+WORKDATA="${WORKDIR}/data.txt"
+mkdir -p $WORKDIR && cd $WORKDIR
 
 IP4=$(curl -4 -s icanhazip.com)
 IP6=$(curl -6 -s icanhazip.com | cut -f1-4 -d':')
 
-if [ -z "$IP4" ]; then
-    echo "Không lấy được IPv4 từ icanhazip.com, dừng."
-    exit 1
-fi
+echo "Internal IP = ${IP4}. External sub for IP6 = ${IP6}"
 
-if [ -z "$IP6" ]; then
-    echo "Không lấy được IPv6 prefix (curl -6 thất bại). Đảm bảo đã chạy script IPv6 trước."
-    exit 1
-fi
+FIRST_PORT=22000
+LAST_PORT=22999
 
-echo "[*] IPv4 = ${IP4}"
-echo "[*] IPv6 prefix = ${IP6}"
-echo "[*] Tạo proxy từ port $FIRST_PORT đến $LAST_PORT ..."
+gen_data >$WORKDIR/data.txt
+gen_ifconfig >$WORKDIR/boot_ifconfig.sh
+chmod +x boot_*.sh /etc/rc.d/rc.local
 
-install_3proxy
+gen_3proxy >/usr/local/etc/3proxy/3proxy.cfg
 
-gen_data > "$WORKDATA"
-gen_ifconfig > /usr/local/bin/3proxy_boot_ifconfig.sh
-chmod +x /usr/local/bin/3proxy_boot_ifconfig.sh
-
-mkdir -p /usr/local/etc/3proxy
-gen_3proxy > /usr/local/etc/3proxy/3proxy.cfg
-
-echo "[*] Tạo systemd service cho 3proxy..."
-cat >/etc/systemd/system/3proxy.service <<EOF
-[Unit]
-Description=3proxy Proxy Server
-After=network-online.target
-Wants=network-online.target
-
-[Service]
-Type=simple
-LimitNOFILE=65535
-ExecStartPre=/usr/local/bin/3proxy_boot_ifconfig.sh
-ExecStart=/usr/local/etc/3proxy/bin/3proxy /usr/local/etc/3proxy/3proxy.cfg
-Restart=on-failure
-
-[Install]
-WantedBy=multi-user.target
+cat >>/etc/rc.d/rc.local <<EOF
+bash ${WORKDIR}/boot_ifconfig.sh
+ulimit -n 10048
+/usr/local/etc/3proxy/bin/3proxy /usr/local/etc/3proxy/3proxy.cfg
 EOF
 
-systemctl daemon-reload
-systemctl enable --now 3proxy.service || {
-    echo "Không start được 3proxy.service, vui lòng kiểm tra: journalctl -u 3proxy.service"
-}
+chmod +x /etc/rc.d/rc.local
+systemctl enable rc-local
+systemctl start rc-local
 
-open_firewall
+bash /etc/rc.local
 
 gen_proxy_file_for_user
-rm -rf "$WORKDIR/3proxy-0.8.13" 2>/dev/null || true
+rm -rf /root/setup.sh
+rm -rf /root/3proxy-3proxy-0.8.6
 
-echo "=============================================="
-echo " HOÀN THÀNH!"
-echo " File proxy list: ${WORKDIR}/proxy.txt"
-echo " Định dạng: IP:PORT (1000 proxy từ $FIRST_PORT đến $LAST_PORT)"
-echo " Chỉ IP được phép: ${MY_ALLOWED_IP}"
-echo "Xem thử vài dòng đầu:"
-head -n 10 "${WORKDIR}/proxy.txt" || true
-echo "=============================================="
+echo "Starting Proxy"
